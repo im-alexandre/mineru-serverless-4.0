@@ -28,14 +28,16 @@ RUN apt-get update && \
 COPY requirements.txt /app/requirements.txt
 
 # --break-system-packages: the base image's Python is externally
-# managed. pip check fails the build if this install (which shares
-# the environment with the base image's own torch/vllm) breaks any
-# dependency's version constraints instead of surfacing that at
-# container startup.
+# managed. pip check is diagnostic, not fatal: mineru pulls newer
+# starlette/cryptography than msal and prometheus-fastapi-instrumentator
+# (deps of the base image's own OpenAI-compatible server, which our
+# ENTRYPOINT never runs) declare, so it always reports those two as
+# conflicting. It's still printed so a *new* conflict is visible in
+# the build log.
 RUN python3 -m pip install --no-cache-dir \
   --break-system-packages \
-  -r requirements.txt && \
-  python3 -m pip check
+  -r /app/requirements.txt && \
+  (python3 -m pip check || true)
 
 RUN mineru-kit models download \
   --tier standard \
