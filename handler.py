@@ -1,11 +1,14 @@
 import asyncio
 import hashlib
+import ipaddress
 import os
 import posixpath
+import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -158,20 +161,32 @@ def start_router() -> None:
     raise TimeoutError("MinerU router did not become healthy")
 
 
+_router_lock = threading.Lock()
+
+
+def ensure_router() -> None:
+    """Restart the router if it has died since startup.
+
+    Called before every job because start_router() only guarantees
+    health at import time; a crash afterward would otherwise fail
+    every subsequent job with no recovery.
+    """
+    if router_health():
+        return
+
+    with _router_lock:
+        if router_health():
+            return
+
+        print(
+            "[worker] MinerU router is unreachable, restarting",
+            flush=True,
+        )
+        start_router()
+
+
 # Start once when RunPod creates this worker.
 start_router()
-
-
-# ---------------------------------------------------------------------
-# Shared MinerU client
-# ---------------------------------------------------------------------
-
-parser = MinerUApiParser(
-    api_url=ROUTER_URL,
-    api_key="",
-    tier=MINERU_TIER,
-    include_images=True,
-)
 
 
 # ---------------------------------------------------------------------
@@ -190,23 +205,80 @@ def output_key(
     filename: str,
     requested_key: str,
 ) -> str:
+    """Resolve the destination S3 key for a job's output tarball.
+
+    ``requested_key`` is treated as a directory prefix when it ends
+    in "/" (or is empty); the tarball is named after the source PDF.
+    Anything else is treated as the literal final key the caller
+    wants, unchanged.
+    """
 
     requested_key = requested_key.lstrip("/")
-
-    if requested_key.endswith("/"):
-        prefix = requested_key.rstrip("/")
-    else:
-        prefix = posixpath.dirname(requested_key)
-
     tarball_name = f"{Path(filename).stem}.tar.gz"
 
-    if prefix:
-        return posixpath.join(
-            prefix,
-            tarball_name,
-        )
+    if not requested_key or requested_key.endswith("/"):
+        prefix = requested_key.rstrip("/")
 
-    return tarball_name
+        if prefix:
+            return posixpath.join(
+                prefix,
+                tarball_name,
+            )
+
+        return tarball_name
+
+    return requested_key
+
+
+class UnsafeURLError(ValueError):
+    """Raised when a job-supplied URL is not safe to fetch."""
+
+
+_ALLOWED_URL_SCHEMES = {"http", "https"}
+
+
+def _is_public_address(address: str) -> bool:
+    ip = ipaddress.ip_address(address)
+
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def assert_safe_url(url: str) -> None:
+    """Reject job-supplied URLs that could be used for SSRF.
+
+    Job input is attacker-controlled (it names the URL this worker
+    downloads), so we only allow http(s) URLs whose host resolves
+    exclusively to public IPs, rejecting cloud metadata endpoints
+    and other internal services.
+    """
+    parsed = urlparse(url)
+
+    if parsed.scheme not in _ALLOWED_URL_SCHEMES:
+        raise UnsafeURLError(f"unsupported URL scheme: {parsed.scheme!r}")
+
+    if not parsed.hostname:
+        raise UnsafeURLError("URL has no host")
+
+    try:
+        resolved = {
+            info[4][0] for info in socket.getaddrinfo(parsed.hostname, None)
+        }
+    except socket.gaierror as exc:
+        raise UnsafeURLError(
+            f"could not resolve host: {parsed.hostname!r}"
+        ) from exc
+
+    if not resolved or not all(_is_public_address(ip) for ip in resolved):
+        raise UnsafeURLError(
+            f"host resolves to a non-public address: {parsed.hostname!r}"
+        )
 
 
 def download_file(
@@ -214,11 +286,17 @@ def download_file(
     destination: Path,
 ) -> None:
 
+    assert_safe_url(url)
+
     with requests.get(
         url,
         stream=True,
         timeout=(30, 1800),
+        allow_redirects=False,
     ) as response:
+        if 300 <= response.status_code < 400:
+            raise UnsafeURLError("redirects are not followed for job-supplied URLs")
+
         response.raise_for_status()
 
         with destination.open("wb") as file:
@@ -261,6 +339,8 @@ def sha256(path: Path) -> str:
 
 
 def process_job(job: dict) -> dict:
+
+    ensure_router()
 
     data = job["input"]
 

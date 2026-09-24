@@ -44,7 +44,25 @@ S3_BUCKET = os.environ["S3_BUCKET"]
 S3_INPUT_PREFIX = os.environ["S3_INPUT_PREFIX"].strip("/")
 S3_OUTPUT_PREFIX = os.environ["S3_OUTPUT_PREFIX"].strip("/")
 
-S3_INPUT_URL_EXPIRES = int(os.environ.get("S3_INPUT_URL_EXPIRES", "3600"))
+#
+# Defaults to slightly longer than RUNPOD_JOB_TIMEOUT: if the
+# presigned URL expires before a queued job is picked up by a
+# worker, the download inside the worker fails with a 403.
+#
+S3_INPUT_URL_EXPIRES = int(
+    os.environ.get(
+        "S3_INPUT_URL_EXPIRES",
+        str(RUNPOD_JOB_TIMEOUT + 600),
+    )
+)
+
+if S3_INPUT_URL_EXPIRES < RUNPOD_JOB_TIMEOUT:
+    print(
+        f"[client] warning: S3_INPUT_URL_EXPIRES ({S3_INPUT_URL_EXPIRES}s) is "
+        f"shorter than RUNPOD_JOB_TIMEOUT ({RUNPOD_JOB_TIMEOUT}s); presigned "
+        "input URLs may expire before a queued job is picked up",
+        flush=True,
+    )
 
 
 # ---------------------------------------------------------------------
@@ -84,7 +102,15 @@ def ensure_bucket() -> None:
     except ClientError as exc:
         if exc.response["Error"]["Code"] not in {"404", "NoSuchBucket", "NotFound"}:
             raise
-        s3.create_bucket(Bucket=S3_BUCKET)
+
+        create_kwargs = {"Bucket": S3_BUCKET}
+
+        if S3_REGION != "us-east-1":
+            create_kwargs["CreateBucketConfiguration"] = {
+                "LocationConstraint": S3_REGION,
+            }
+
+        s3.create_bucket(**create_kwargs)
 
 
 def upload_pdf(path: str | Path, document_id: str) -> tuple[str, str]:
@@ -123,6 +149,26 @@ def delete_input(key: str) -> None:
         Bucket=S3_BUCKET,
         Key=key,
     )
+
+
+def _cleanup_input(submitted: dict, cleanup: bool) -> None:
+    """Best-effort delete of a job's uploaded input, on any outcome.
+
+    Failures here are logged, not raised: losing track of the job
+    result over a cleanup error would be worse than an orphaned
+    input object.
+    """
+    if not cleanup:
+        return
+
+    try:
+        delete_input(submitted["input_key"])
+    except ClientError as exc:
+        print(
+            f"[client] warning: failed to delete input "
+            f"{submitted['input_key']}: {exc}",
+            flush=True,
+        )
 
 
 # ---------------------------------------------------------------------
@@ -246,8 +292,7 @@ def wait_for_job(
         if status == "COMPLETED":
             result = job.output()
 
-            if cleanup_input:
-                delete_input(submitted["input_key"])
+            _cleanup_input(submitted, cleanup_input)
 
             return result
 
@@ -256,9 +301,13 @@ def wait_for_job(
             "CANCELLED",
             "TIMED_OUT",
         }:
+            _cleanup_input(submitted, cleanup_input)
+
             raise RuntimeError(f"Job {job.job_id} ended with {status}")
 
         if time.monotonic() - submitted["submitted_at"] > RUNPOD_JOB_TIMEOUT:
+            _cleanup_input(submitted, cleanup_input)
+
             raise TimeoutError(f"Client timeout waiting for {job.job_id}")
 
         time.sleep(RUNPOD_POLL_INTERVAL)
@@ -341,8 +390,7 @@ def run_batch(
             if status == "COMPLETED":
                 result = job.output()
 
-                if cleanup_inputs:
-                    delete_input(submitted["input_key"])
+                _cleanup_input(submitted, cleanup_inputs)
 
                 completed.append(
                     {
@@ -362,6 +410,8 @@ def run_batch(
                 "CANCELLED",
                 "TIMED_OUT",
             }:
+                _cleanup_input(submitted, cleanup_inputs)
+
                 completed.append(
                     {
                         "job_id": job_id,
@@ -375,6 +425,8 @@ def run_batch(
                 print(f"{status} {job_id}")
 
             elif time.monotonic() - submitted["submitted_at"] > RUNPOD_JOB_TIMEOUT:
+                _cleanup_input(submitted, cleanup_inputs)
+
                 completed.append(
                     {
                         "job_id": job_id,

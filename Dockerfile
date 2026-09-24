@@ -25,13 +25,17 @@ RUN apt-get update && \
   fc-cache -fv && \
   rm -rf /var/lib/apt/lists/*
 
+COPY requirements.txt /app/requirements.txt
+
+# --break-system-packages: the base image's Python is externally
+# managed. pip check fails the build if this install (which shares
+# the environment with the base image's own torch/vllm) breaks any
+# dependency's version constraints instead of surfacing that at
+# container startup.
 RUN python3 -m pip install --no-cache-dir \
-  "mineru[torch]==4.0.7" \
-  "runpod>=1.7" \
-  requests \
-  httpx \
-  boto3 \
-  --break-system-packages
+  --break-system-packages \
+  -r requirements.txt && \
+  python3 -m pip check
 
 RUN mineru-kit models download \
   --tier standard \
@@ -46,3 +50,4 @@ RUN mineru-kit models download \
 COPY handler.py /app/handler.py
 
 ENTRYPOINT ["python3", "-u", "/app/handler.py"]
+CMD []

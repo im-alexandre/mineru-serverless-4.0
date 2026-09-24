@@ -1,3 +1,5 @@
-runpod
+mineru[torch]==4.0.7
+runpod>=1.7
 requests
 httpx
+boto3

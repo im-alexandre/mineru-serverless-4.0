@@ -3,30 +3,30 @@ import os
 import boto3
 import runpod
 from botocore.client import Config
+from dotenv import load_dotenv
 
-runpod.api_key = os.getenv("RUNPOD_API_KEY")
+load_dotenv()
 
-endpoint = runpod.Endpoint("4lnkcbnpdptcey")
+runpod.api_key = os.environ["RUNPOD_API_KEY"]
 
-# Configure the S3 client to point to your SeaweedFS S3 endpoint
+endpoint = runpod.Endpoint(os.environ["RUNPOD_ENDPOINT_ID"])
+
 s3_client = boto3.client(
     "s3",
-    endpoint_url="https://storage.baseia.ai",  # Replace with your SeaweedFS S3 endpoint
-    aws_access_key_id="baseia",  # Replace with your SeaweedFS access key
-    aws_secret_access_key="baseia",  # Replace with your SeaweedFS secret key
-    config=Config(signature_version="s3v4"),  # Recommended for S3 compatibility
+    endpoint_url=os.environ["S3_ENDPOINT_URL"],
+    aws_access_key_id=os.environ["S3_ACCESS_KEY_ID"],
+    aws_secret_access_key=os.environ["S3_SECRET_ACCESS_KEY"],
+    config=Config(signature_version="s3v4"),
 )
 
-# Generate a presigned URL to get/download an object
 presigned_url = s3_client.generate_presigned_url(
     ClientMethod="get_object",
     Params={
-        "Bucket": "baseia-marinha",  # Replace with your bucket name
-        "Key": "documentos/SGM-303-Rev7.pdf",  # Replace with your object key/path
+        "Bucket": os.environ["S3_BUCKET"],
+        "Key": os.environ["EXAMPLE_S3_KEY"],
     },
-    ExpiresIn=3600,  # URL validity in seconds (1 hour)
+    ExpiresIn=3600,
 )
-
 
 result = endpoint.run_sync(
     {
