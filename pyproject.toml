@@ -9,3 +9,9 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "runpod>=1.10.0",
 ]
+
+[tool.uv]
+# /root/.cache/uv and the project's .venv often live on different
+# filesystems/mounts inside containers, where hardlinking fails with
+# "Operation not permitted". Copying avoids that at a small speed cost.
+link-mode = "copy"
