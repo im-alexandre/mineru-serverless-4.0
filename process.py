@@ -6,7 +6,7 @@ from botocore.client import Config
 
 runpod.api_key = os.getenv("RUNPOD_API_KEY")
 
-endpoint = runpod.Endpoint("3aw008zvs0ilqd")
+endpoint = runpod.Endpoint("4lnkcbnpdptcey")
 
 # Configure the S3 client to point to your SeaweedFS S3 endpoint
 s3_client = boto3.client(

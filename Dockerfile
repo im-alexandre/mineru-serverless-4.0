@@ -37,4 +37,4 @@ RUN mineru-kit models verify \
 
 COPY handler.py /app/handler.py
 
-CMD ["python3", "/app/handler.py"]
+ENTRYPOINT ["python3", "-u", "/app/handler.py"]
