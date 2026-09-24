@@ -27,7 +27,7 @@ Request (`job["input"]`):
   "destination": {"bucket": "...", "key": "prefix/or/exact/key.tar.gz"}
 }
 ```
-`output_key()` derives the final tarball name from the source filename; if `destination.key` ends in `/` (or has no filename) it's treated as a prefix, otherwise its directory portion is used as the prefix.
+`output_key()` derives the final tarball name from the source filename when `destination.key` ends in `/` (or is empty); otherwise it uses the exact key supplied. The client sends `S3_OUTPUT_PREFIX/`, so the output is `<prefix>/<PDF stem>.tar.gz`. The generated document ID is used only for the temporary input upload.
 
 Response: `{status, source, pages, tier, bucket, key, size, sha256}`.
 

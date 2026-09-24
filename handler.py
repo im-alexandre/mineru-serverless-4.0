@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import ipaddress
+import json
 import os
 import posixpath
 import socket
@@ -20,7 +21,9 @@ import runpod
 import torch
 from botocore.config import Config
 from mineru.parser import MinerUApiParser
+from mineru.parser.base import ParseResult
 from mineru.parser.writer import FileBasedDataWriter
+from mineru.render import render_content_list_v2
 
 # ---------------------------------------------------------------------
 # Configuration
@@ -412,6 +415,18 @@ def process_job(job: dict) -> dict:
         # images/
         #
         result.save(FileBasedDataWriter(str(output_dir)))
+
+        # Render from the materialized MiddleJson saved by MinerU, so image
+        # references in Content List V2 point to assets inside this package.
+        saved = ParseResult.from_json(
+            (output_dir / "middle_json.json").read_text(encoding="utf-8")
+        )
+        (output_dir / "content_list_v2.json").write_text(
+            json.dumps(
+                render_content_list_v2(saved.middle_json), ensure_ascii=False, indent=2
+            ),
+            encoding="utf-8",
+        )
 
         create_tarball(
             output_dir,

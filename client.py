@@ -165,8 +165,7 @@ def _cleanup_input(submitted: dict, cleanup: bool) -> None:
         delete_input(submitted["input_key"])
     except ClientError as exc:
         print(
-            f"[client] warning: failed to delete input "
-            f"{submitted['input_key']}: {exc}",
+            f"[client] warning: failed to delete input {submitted['input_key']}: {exc}",
             flush=True,
         )
 
@@ -262,7 +261,7 @@ def submit_document(
         "pages": pages,
         "destination": {
             "bucket": S3_BUCKET,
-            "key": f"{S3_OUTPUT_PREFIX}/{document_id}/",
+            "key": f"{S3_OUTPUT_PREFIX}/",
         },
     }
 
@@ -452,15 +451,7 @@ def run_batch(
 if __name__ == "__main__":
     documents = [
         {
-            "file": "pdfs/documento1.pdf",
-            "tier": "standard",
-        },
-        {
-            "file": "pdfs/documento2.pdf",
-            "tier": "standard",
-        },
-        {
-            "file": "pdfs/documento3.pdf",
+            "file": "documentos/SGM-303-Rev7.pdf",
             "tier": "standard",
         },
     ]
