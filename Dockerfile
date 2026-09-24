@@ -1,6 +1,7 @@
 FROM vllm/vllm-openai:v0.21.0
 
 ENV DEBIAN_FRONTEND=noninteractive
+
 ENV MINERU_MODEL_SMALL_BACKEND=torch
 ENV MINERU_MODEL_VLM_ENGINE=vllm
 ENV MINERU_MODEL_SOURCE=local
@@ -13,18 +14,18 @@ RUN apt-get update && \
   fonts-noto-cjk \
   fontconfig \
   libgl1 \
-  curl && \
+  curl \
+  ca-certificates && \
   fc-cache -fv && \
   rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m pip install --no-cache-dir \
-  "mineru[full]>=4.0,<5" \
+  "mineru[torch]>=4.0,<5" \
   runpod \
   requests \
-  httpx \
   --break-system-packages
 
-# Baixa os modelos no build.
+# Modelos usados por standard/advanced.
 RUN mineru-kit models download \
   --tier standard \
   --small-backend torch \

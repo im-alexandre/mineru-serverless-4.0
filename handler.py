@@ -1,106 +1,81 @@
-import os
-import subprocess
-import sys
+import base64
+import tarfile
 import tempfile
-import threading
-import time
 from pathlib import Path
+from urllib.parse import urlparse
 
-import httpx
 import requests
 import runpod
-from mineru.parser import MinerUApiParser
+from mineru.parser import parse
+from mineru.parser.writer import FileBasedDataWriter
 
-MINERU_API_HOST = "127.0.0.1"
-MINERU_API_PORT = int(os.environ.get("MINERU_API_PORT", "8000"))
-MINERU_API_URL = f"http://{MINERU_API_HOST}:{MINERU_API_PORT}"
-MINERU_SERVER_TIER = os.environ.get("MINERU_SERVER_TIER", "standard")
-MINERU_SERVER_STARTUP_TIMEOUT = float(os.environ.get("MINERU_SERVER_STARTUP_TIMEOUT", "600"))
-
-_server_lock = threading.Lock()
-_server_process: subprocess.Popen | None = None
+DEFAULT_TIER = "standard"
 
 
-def _server_healthy() -> bool:
-    try:
-        response = httpx.get(f"{MINERU_API_URL}/v1/health", timeout=3)
-        return response.status_code == 200
-    except httpx.HTTPError:
-        return False
-
-
-def ensure_mineru_server() -> None:
-    """Start the local MinerU REST API server (mineru-api) once per worker process."""
-    global _server_process
-
-    if _server_healthy():
-        return
-
-    with _server_lock:
-        if _server_healthy():
-            return
-
-        if _server_process is None or _server_process.poll() is not None:
-            _server_process = subprocess.Popen(
-                [
-                    "mineru-api",
-                    "--host",
-                    MINERU_API_HOST,
-                    "--port",
-                    str(MINERU_API_PORT),
-                    "--tier",
-                    MINERU_SERVER_TIER,
-                    "--allow-local-source",
-                    "--preload-models",
-                ],
-                stdout=sys.stdout,
-                stderr=sys.stderr,
-            )
-
-        deadline = time.monotonic() + MINERU_SERVER_STARTUP_TIMEOUT
-        while time.monotonic() < deadline:
-            if _server_healthy():
-                return
-            if _server_process.poll() is not None:
-                raise RuntimeError(
-                    f"mineru-api server exited unexpectedly during startup (code {_server_process.returncode})"
-                )
-            time.sleep(1)
-
-        raise TimeoutError("mineru-api server did not become healthy in time")
-
-
-def download_file(url: str, path: Path) -> None:
-    with requests.get(url, stream=True, timeout=300) as response:
+def download_file(url: str, dst: Path) -> None:
+    with requests.get(url, stream=True, timeout=(30, 600)) as response:
         response.raise_for_status()
 
-        with path.open("wb") as f:
+        with dst.open("wb") as f:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     f.write(chunk)
 
 
+def filename_from_url(url: str) -> str:
+    name = Path(urlparse(url).path).name
+
+    if not name:
+        return "input.pdf"
+
+    return name
+
+
+def create_tarball(source_dir: Path, tar_path: Path) -> None:
+    with tarfile.open(tar_path, "w:gz") as tar:
+        for item in source_dir.iterdir():
+            tar.add(item, arcname=item.name)
+
+
 def handler(job):
-    input_data = job["input"]
+    data = job["input"]
 
-    url = input_data["url"]
-    tier = input_data.get("tier", MINERU_SERVER_TIER)
-    pages = input_data.get("pages", "all")
+    url = data["url"]
+    tier = data.get("tier", DEFAULT_TIER)
+    pages = data.get("pages", "all")
+    ocr_mode = data.get("ocr_mode", "auto")
 
-    ensure_mineru_server()
+    with tempfile.TemporaryDirectory(prefix="mineru-") as tmpdir:
+        tmp = Path(tmpdir)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        pdf_path = Path(tmp) / "input.pdf"
+        input_path = tmp / filename_from_url(url)
+        output_dir = tmp / "output"
+        tarball_path = tmp / "mineru-output.tar.gz"
 
-        download_file(url, pdf_path)
+        output_dir.mkdir(parents=True)
 
-        parser = MinerUApiParser(api_url=MINERU_API_URL, tier=tier)
-        result = parser.parse(pdf_path, page_range=pages)
+        download_file(url, input_path)
+
+        result = parse(
+            str(input_path),
+            tier=tier,
+            ocr_mode=ocr_mode,
+            page_range=pages,
+        )
+
+        writer = FileBasedDataWriter(str(output_dir))
+        result.save(writer)
+
+        create_tarball(output_dir, tarball_path)
+
+        tarball = tarball_path.read_bytes()
 
         return {
-            "pages": len(result.pages),
             "tier": tier,
-            "markdown": result.markdown(),
+            "pages": len(result.pages),
+            "filename": "mineru-output.tar.gz",
+            "size": len(tarball),
+            "data_base64": base64.b64encode(tarball).decode("ascii"),
         }
 
 
